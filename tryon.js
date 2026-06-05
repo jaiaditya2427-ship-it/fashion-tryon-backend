@@ -1,21 +1,32 @@
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Only POST allowed" });
-  }
-
+app.post("/tryon", async (req, res) => {
   try {
-    const { personImg, clothImg, garment } = req.body;
-
     const apiKey = process.env.REPLICATE_API_KEY;
 
+    if (!apiKey) {
+      return res.status(500).json({
+        success: false,
+        error: "REPLICATE_API_KEY is not set"
+      });
+    }
+
+    const { personImg, clothImg, garment } = req.body;
+
+    if (!personImg || !clothImg) {
+      return res.status(400).json({
+        success: false,
+        error: "personImg and clothImg are required"
+      });
+    }
+
+    // 1️⃣ Create prediction
     const createRes = await fetch("https://api.replicate.com/v1/predictions", {
       method: "POST",
       headers: {
-        "Authorization": `Token ${apiKey}`,
+        Authorization: `Token ${apiKey}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        version: "c871bb9b046607b680449ecbae55fd8c6d945e0a1948644bf2361b3d021d3ff4",
+        version: "906425dbca90663ff5427624839572cc56ea7d380343d13e2a4c4b09d3f0c30f",
         input: {
           human_img: personImg,
           garm_img: clothImg,
@@ -32,19 +43,23 @@ export default async function handler(req, res) {
     const prediction = await createRes.json();
 
     if (!createRes.ok) {
-      return res.status(400).json({ error: prediction.detail || "Failed" });
+      return res.status(400).json({
+        success: false,
+        error: prediction.detail || "Failed to create prediction"
+      });
     }
 
+    // 2️⃣ Poll result
     let output = null;
 
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 60; i++) {
       await new Promise(r => setTimeout(r, 3000));
 
       const pollRes = await fetch(
         `https://api.replicate.com/v1/predictions/${prediction.id}`,
         {
           headers: {
-            "Authorization": `Token ${apiKey}`
+            Authorization: `Token ${apiKey}`
           }
         }
       );
@@ -52,22 +67,35 @@ export default async function handler(req, res) {
       const data = await pollRes.json();
 
       if (data.status === "succeeded") {
-        output = data.output?.[0] || data.output;
+        output = data.output?.[0] ?? data.output;
         break;
       }
 
       if (data.status === "failed") {
-        return res.status(500).json({ error: data.error });
+        return res.status(500).json({
+          success: false,
+          error: data.error || "Prediction failed"
+        });
       }
     }
 
     if (!output) {
-      return res.status(408).json({ error: "Timeout" });
+      return res.status(408).json({
+        success: false,
+        error: "Timeout: model took too long"
+      });
     }
 
-    return res.status(200).json({ result: output });
+    // 3️⃣ Success response
+    return res.json({
+      success: true,
+      image: output
+    });
 
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({
+      success: false,
+      error: err.message
+    });
   }
-}
+});
