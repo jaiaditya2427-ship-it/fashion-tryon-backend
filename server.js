@@ -5,23 +5,37 @@ import express from "express";
 import cors from "cors";
 
 const app = express();
-app.use(cors());
+
+// CORS (safe for Vercel frontend)
+app.use(cors({
+  origin: "*"
+}));
+
 app.use(express.json({ limit: "10mb" }));
 
 const API_KEY = process.env.REPLICATE_API_KEY;
 
+// Health check route
+app.get("/", (req, res) => {
+  res.json({ status: "Backend is running 🚀" });
+});
+
 app.post("/tryon", async (req, res) => {
   try {
-    // Guard: API key
     if (!API_KEY) {
-      return res.status(500).json({ success: false, error: "REPLICATE_API_KEY is not set" });
+      return res.status(500).json({
+        success: false,
+        error: "REPLICATE_API_KEY is not set"
+      });
     }
 
     const { personImg, clothImg, garment } = req.body;
 
-    // Guard: required inputs
     if (!personImg || !clothImg) {
-      return res.status(400).json({ success: false, error: "personImg and clothImg are required" });
+      return res.status(400).json({
+        success: false,
+        error: "personImg and clothImg are required"
+      });
     }
 
     const createRes = await fetch("https://api.replicate.com/v1/predictions", {
@@ -48,7 +62,10 @@ app.post("/tryon", async (req, res) => {
     const prediction = await createRes.json();
 
     if (!createRes.ok) {
-      return res.status(400).json({ success: false, error: prediction.detail || "Failed to create prediction" });
+      return res.status(400).json({
+        success: false,
+        error: prediction.detail || "Failed to create prediction"
+      });
     }
 
     let output = null;
@@ -56,25 +73,16 @@ app.post("/tryon", async (req, res) => {
     for (let i = 0; i < 60; i++) {
       await new Promise(r => setTimeout(r, 3000));
 
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000);
-
-      let data;
-      try {
-        const pollRes = await fetch(
-          `https://api.replicate.com/v1/predictions/${prediction.id}`,
-          {
-            headers: { Authorization: `Token ${API_KEY}` },
-            signal: controller.signal
+      const pollRes = await fetch(
+        `https://api.replicate.com/v1/predictions/${prediction.id}`,
+        {
+          headers: {
+            Authorization: `Token ${API_KEY}`
           }
-        );
-        data = await pollRes.json();
-      } catch (fetchErr) {
-        clearTimeout(timeout);
-        continue;
-      }
+        }
+      );
 
-      clearTimeout(timeout);
+      const data = await pollRes.json();
 
       if (data.status === "succeeded") {
         output = data.output?.[0] ?? data.output;
@@ -82,21 +90,36 @@ app.post("/tryon", async (req, res) => {
       }
 
       if (data.status === "failed") {
-        return res.status(500).json({ success: false, error: data.error || "Prediction failed" });
+        return res.status(500).json({
+          success: false,
+          error: data.error || "Prediction failed"
+        });
       }
     }
 
     if (!output) {
-      return res.status(408).json({ success: false, error: "Timeout: model took too long, please try again" });
+      return res.status(408).json({
+        success: false,
+        error: "Timeout: model took too long"
+      });
     }
 
-    res.json({ success: true, image: output });
+    return res.json({
+      success: true,
+      image: output
+    });
 
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({
+      success: false,
+      error: err.message
+    });
   }
 });
 
-app.listen(5000, () => {
-  console.log("Backend running on http://localhost:5000");
+// ✅ IMPORTANT FIX FOR RENDER (THIS WAS YOUR MAIN ISSUE)
+const PORT = process.env.PORT;
+
+app.listen(PORT, () => {
+  console.log(`Backend running on port ${PORT}`);
 });
