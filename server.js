@@ -106,7 +106,13 @@ app.post("/tryon", async (req, res) => {
       console.log(`Poll ${i + 1}: status = ${data.status}`);
 
       if (data.status === "succeeded") {
-        console.log("Raw output:", JSON.stringify(data.output));
+        console.log("RAW OUTPUT FULL:", JSON.stringify(data.output));
+console.log("OUTPUT TYPE:", typeof data.output);
+console.log("IS ARRAY:", Array.isArray(data.output));
+if (Array.isArray(data.output)) {
+  console.log("FIRST ELEMENT:", JSON.stringify(data.output[0]));
+  console.log("FIRST TYPE:", typeof data.output[0]);
+}
 
         const raw = data.output;
         if (typeof raw === "string") {
