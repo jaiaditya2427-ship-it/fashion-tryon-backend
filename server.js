@@ -66,7 +66,7 @@ app.post("/tryon", async (req, res) => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        version: "c871bb9b046607b680449ecbae55fd8c6d945e0a1948644bf2361b3d021d3ff4",
+        version: "0513734a452173b8173e907e3a59d19a36266e55b48528559432bd21c7d7e985",
         input: {
           human_img:       personUrl,
           garm_img:        clothUrl,
