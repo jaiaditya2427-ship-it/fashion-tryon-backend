@@ -26,9 +26,8 @@ app.post("/tryon", async (req, res) => {
       return res.status(400).json({ success: false, error: "personImg and clothImg are required" });
     }
 
-    // ── Upload images to Replicate file storage first ──────────────────────
+    // ── Upload image to Replicate storage ─────────────────────────────────
     const uploadImage = async (dataUrl) => {
-      // Convert base64 dataURL to buffer
       const base64 = dataUrl.split(",")[1];
       const mimeType = dataUrl.split(";")[0].split(":")[1] || "image/jpeg";
       const buffer = Buffer.from(base64, "base64");
@@ -44,23 +43,22 @@ app.post("/tryon", async (req, res) => {
       });
 
       if (!uploadRes.ok) {
-        const err = await uploadRes.json().catch(() => ({}));
-        console.error("Upload error:", err);
-        // fallback — return original dataUrl
+        console.error("Upload failed, using base64 directly");
         return dataUrl;
       }
 
       const file = await uploadRes.json();
-      console.log("Uploaded file URL:", file.urls?.get || file.url);
-      return file.urls?.get || file.url || dataUrl;
+      const url = file.urls?.get || file.url || dataUrl;
+      console.log("Uploaded:", url);
+      return url;
     };
 
     console.log("Uploading images...");
     const personUrl = await uploadImage(personImg);
     const clothUrl  = await uploadImage(clothImg);
-    console.log("Images uploaded!");
+    console.log("Both images uploaded!");
 
-    // ── Create prediction ──────────────────────────────────────────────────
+    // ── Create prediction ─────────────────────────────────────────────────
     const createRes = await fetch("https://api.replicate.com/v1/predictions", {
       method: "POST",
       headers: {
@@ -91,56 +89,74 @@ app.post("/tryon", async (req, res) => {
 
     console.log(`Prediction created: ${prediction.id}`);
 
-    // ── Poll for result ────────────────────────────────────────────────────
-    let output = null;
+    // ── Poll for result ───────────────────────────────────────────────────
+    let imageUrl = null;
 
     for (let i = 0; i < 60; i++) {
       await new Promise(r => setTimeout(r, 3000));
 
+      // ✅ Use Accept: application/json to force plain URL strings not FileOutput objects
       const pollRes = await fetch(
         `https://api.replicate.com/v1/predictions/${prediction.id}`,
-        { headers: { Authorization: `Token ${API_KEY}` } }
+        {
+          headers: {
+            Authorization: `Token ${API_KEY}`,
+            "Accept": "application/json",
+          }
+        }
       );
 
       const data = await pollRes.json();
       console.log(`Poll ${i + 1}: status = ${data.status}`);
 
       if (data.status === "succeeded") {
-        console.log("RAW OUTPUT FULL:", JSON.stringify(data.output));
-console.log("OUTPUT TYPE:", typeof data.output);
-console.log("IS ARRAY:", Array.isArray(data.output));
-if (Array.isArray(data.output)) {
-  console.log("FIRST ELEMENT:", JSON.stringify(data.output[0]));
-  console.log("FIRST TYPE:", typeof data.output[0]);
-}
-
         const raw = data.output;
-        if (typeof raw === "string") {
-          output = raw;
+        console.log("RAW OUTPUT TYPE:", typeof raw);
+        console.log("RAW OUTPUT:", JSON.stringify(raw));
+
+        // ✅ Handle every possible format
+        if (typeof raw === "string" && raw.startsWith("http")) {
+          imageUrl = raw;
         } else if (Array.isArray(raw)) {
-          const first = raw[0];
-          if (typeof first === "string") output = first;
-          else if (first?.url) output = first.url;
-          else output = String(first);
+          for (const item of raw) {
+            if (typeof item === "string" && item.startsWith("http")) {
+              imageUrl = item;
+              break;
+            } else if (item && typeof item === "object") {
+              // FileOutput object — get the URL string from it
+              const str = item.toString ? item.toString() : JSON.stringify(item);
+              if (str.startsWith("http")) { imageUrl = str; break; }
+              if (item.url && typeof item.url === "string") { imageUrl = item.url; break; }
+              if (item.href && typeof item.href === "string") { imageUrl = item.href; break; }
+              // Try all string values
+              for (const val of Object.values(item)) {
+                if (typeof val === "string" && val.startsWith("http")) {
+                  imageUrl = val; break;
+                }
+              }
+            }
+          }
         } else if (raw && typeof raw === "object") {
-          output = raw.url || raw.image || Object.values(raw)[0];
+          const str = raw.toString ? raw.toString() : "";
+          if (str.startsWith("http")) imageUrl = str;
+          else imageUrl = raw.url || raw.href || raw.image || Object.values(raw).find(v => typeof v === "string" && v.startsWith("http"));
         }
 
-        console.log("Final image URL:", output);
+        console.log("FINAL IMAGE URL:", imageUrl);
         break;
       }
 
       if (data.status === "failed") {
-        console.error("Prediction failed:", data.error);
+        console.error("Failed:", data.error);
         return res.status(500).json({ success: false, error: data.error || "AI model failed" });
       }
     }
 
-    if (!output) {
-      return res.status(408).json({ success: false, error: "Timed out. Please try again." });
+    if (!imageUrl) {
+      return res.status(408).json({ success: false, error: "Could not get image URL. Please try again." });
     }
 
-    return res.json({ success: true, image: output });
+    return res.json({ success: true, image: imageUrl });
 
   } catch (err) {
     console.error("Server error:", err);
