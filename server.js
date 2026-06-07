@@ -6,7 +6,7 @@ import cors from "cors";
 const app = express();
 
 app.use(cors({ origin: "*", methods: ["GET", "POST"], allowedHeaders: ["Content-Type"] }));
-app.use(express.json({ limit: "20mb" }));
+app.use(express.json({ limit: "50mb" }));
 
 const API_KEY = process.env.REPLICATE_API_KEY;
 
@@ -26,6 +26,41 @@ app.post("/tryon", async (req, res) => {
       return res.status(400).json({ success: false, error: "personImg and clothImg are required" });
     }
 
+    // ── Upload images to Replicate file storage first ──────────────────────
+    const uploadImage = async (dataUrl) => {
+      // Convert base64 dataURL to buffer
+      const base64 = dataUrl.split(",")[1];
+      const mimeType = dataUrl.split(";")[0].split(":")[1] || "image/jpeg";
+      const buffer = Buffer.from(base64, "base64");
+
+      const uploadRes = await fetch("https://api.replicate.com/v1/files", {
+        method: "POST",
+        headers: {
+          Authorization: `Token ${API_KEY}`,
+          "Content-Type": mimeType,
+          "Content-Length": buffer.length,
+        },
+        body: buffer,
+      });
+
+      if (!uploadRes.ok) {
+        const err = await uploadRes.json().catch(() => ({}));
+        console.error("Upload error:", err);
+        // fallback — return original dataUrl
+        return dataUrl;
+      }
+
+      const file = await uploadRes.json();
+      console.log("Uploaded file URL:", file.urls?.get || file.url);
+      return file.urls?.get || file.url || dataUrl;
+    };
+
+    console.log("Uploading images...");
+    const personUrl = await uploadImage(personImg);
+    const clothUrl  = await uploadImage(clothImg);
+    console.log("Images uploaded!");
+
+    // ── Create prediction ──────────────────────────────────────────────────
     const createRes = await fetch("https://api.replicate.com/v1/predictions", {
       method: "POST",
       headers: {
@@ -35,8 +70,8 @@ app.post("/tryon", async (req, res) => {
       body: JSON.stringify({
         version: "c871bb9b046607b680449ecbae55fd8c6d945e0a1948644bf2361b3d021d3ff4",
         input: {
-          human_img:       personImg,
-          garm_img:        clothImg,
+          human_img:       personUrl,
+          garm_img:        clothUrl,
           garment_des:     garment?.label    || "clothing item",
           category:        garment?.category || "upper_body",
           is_checked:      true,
@@ -56,6 +91,7 @@ app.post("/tryon", async (req, res) => {
 
     console.log(`Prediction created: ${prediction.id}`);
 
+    // ── Poll for result ────────────────────────────────────────────────────
     let output = null;
 
     for (let i = 0; i < 60; i++) {
@@ -72,30 +108,24 @@ app.post("/tryon", async (req, res) => {
       if (data.status === "succeeded") {
         console.log("Raw output:", JSON.stringify(data.output));
 
-        // ✅ Handle all possible output formats from Replicate
         const raw = data.output;
-
         if (typeof raw === "string") {
           output = raw;
         } else if (Array.isArray(raw)) {
-          // Could be array of strings or array of objects with .url
           const first = raw[0];
-          if (typeof first === "string") {
-            output = first;
-          } else if (first && typeof first === "object" && first.url) {
-            output = first.url;
-          } else if (first && typeof first === "object") {
-            output = Object.values(first)[0];
-          }
+          if (typeof first === "string") output = first;
+          else if (first?.url) output = first.url;
+          else output = String(first);
         } else if (raw && typeof raw === "object") {
           output = raw.url || raw.image || Object.values(raw)[0];
         }
 
-        console.log("Parsed output URL:", output);
+        console.log("Final image URL:", output);
         break;
       }
 
       if (data.status === "failed") {
+        console.error("Prediction failed:", data.error);
         return res.status(500).json({ success: false, error: data.error || "AI model failed" });
       }
     }
